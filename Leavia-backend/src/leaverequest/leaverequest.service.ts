@@ -1,0 +1,237 @@
+/* eslint-disable prettier/prettier */
+import { Injectable } from '@nestjs/common';
+import { CreateLeaverequestDto } from './dto/create-leaverequest.dto';
+import { UpdateLeaverequestDto } from './dto/update-leaverequest.dto';
+import { LeaveRequest } from './entities/leaverequest.entity';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Equal, In, Like, Repository, UpdateResult } from 'typeorm';
+import { Leavetype } from 'src/leavetype/entities/leavetype.entity';
+import { Plazeruser } from 'src/plazeruser/entities/plazeruser.entity';
+import { leaveStatus } from 'src/utility/common/leaverequest..leavestatus.enum';
+import { error } from 'console';
+import { UpdateLeaveRequestStatusDto } from './dto/update-leaveStatus.dto';
+@Injectable()
+export class LeaverequestService {
+  constructor(
+    @InjectRepository(LeaveRequest)
+    private leaverequestRepository: Repository<LeaveRequest>,
+
+    @InjectRepository(Leavetype)
+    private leavetypeRepo: Repository<Leavetype>,
+
+    @InjectRepository(Plazeruser)
+    private plazeruserRepo: Repository<Plazeruser>,
+  ) {}
+
+  async create(
+    createLeaverequestDto: CreateLeaverequestDto,
+  ): Promise<LeaveRequest> {
+    const leaverequest = new LeaveRequest();
+    leaverequest.leaveStart = new Date(createLeaverequestDto.leaveStart);
+    leaverequest.leaveEnd = new Date(createLeaverequestDto.leaveEnd);
+    leaverequest.leaveReason = createLeaverequestDto.leaveReason;
+    leaverequest.requestDate = createLeaverequestDto.requestDate;
+    const leavetype = await this.leavetypeRepo.findOneById(
+      +createLeaverequestDto.leaveType,
+    );
+    leaverequest.leaveTypeid = leavetype;
+
+    const plazeruser = await this.plazeruserRepo.findOneById(
+      createLeaverequestDto.plazeruserid,
+    );
+    leaverequest.userId = plazeruser;
+
+    try {
+      return await this.leaverequestRepository.save(leaverequest);
+    } catch (err) {
+      console.log(error);
+    }
+  }
+
+  async findAll(): Promise<LeaveRequest[]> {
+    return this.leaverequestRepository.find();
+  }
+
+  //get request details by Leaveid
+  async getLeaveDetailsById(leaveId: number) {
+    return await this.leaverequestRepository.findOne({
+      where: { leaveId },
+    });
+  }
+  //get request details by Leaveid
+  async getLeaveDetailsandUserDetails(leaveId) {
+    const userDetails = await this.leaverequestRepository
+      .createQueryBuilder('leaverequest')
+      .leftJoinAndSelect('leaverequest.plazeruserid', 'plazeruser')
+      .where('leaverequest.leaveId = :leaveId', { leaveId })
+      .select([
+        'plazeruser.username',
+        'plazeruser.ufname',
+        'plazeruser.ulname',
+        'plazeruser.addressl1',
+        'plazeruser.addressl2',
+        'plazeruser.addressl3',
+        'plazeruser.role',
+      ])
+      .getRawOne();
+
+    return userDetails;
+  }
+
+  //get leavea requests by leave type
+  async getLeaveDetailsByleaveTypeid(
+    leaveType: number,
+  ): Promise<LeaveRequest[]> {
+    return await this.leaverequestRepository.find({
+      where: {
+        leaveTypeid: {
+          leaveTypeid: leaveType,
+        },
+      },
+      relations: ['leaveType'],
+    });
+  }
+
+  // request leaves by leave status
+  async getLeaveDetailsByleavestatus(
+    leavestatus: leaveStatus,
+  ): Promise<LeaveRequest[]> {
+    return await this.leaverequestRepository.find({
+      where: { leavestatus: In[leavestatus] },
+    });
+  }
+  //Pending Leaves Count
+  async pendingLeavesCount() {
+    const count = await this.leaverequestRepository
+      .createQueryBuilder('leaverequest')
+      .where('leaverequest.leavestatus = :status', { status: '{pending}' })
+      .getCount();
+
+    return count;
+  }
+
+  //remove leave request
+  async removeleaverequest(leaveId: number): Promise<void> {
+    await this.leaverequestRepository.delete(leaveId);
+  }
+
+  //get user pending leaves by user id
+  async getPendingRequestsbyUser(userid: number) {
+    try {
+      const pendingRequests = await this.leaverequestRepository
+        .createQueryBuilder('leaverequest')
+        .leftJoinAndSelect('leaverequest.plazeruserid', 'Plazeruser')
+        .where('Plazeruser.userid = :userid', { userid })
+        .andWhere('leaverequest.leavestatus = :status', { status: '{pending}' })
+        .select([
+          'leaverequest.leaveId',
+          'leaverequest.leaveStart',
+          'leaverequest.leaveEnd',
+          'leaverequest.leaveReason',
+          'leaverequest.requestDate',
+        ])
+        .getMany();
+
+      if (pendingRequests.length === 0) {
+        return 'No Pending request';
+      }
+      return pendingRequests;
+    } catch (error) {
+      console.error('Error in getPendingRequests:', error);
+      return null;
+    }
+  }
+
+  //get leaves for hr pending
+  async getPendingRequests() {
+    const pendingRequests = await this.leaverequestRepository
+      .createQueryBuilder('leaverequest')
+      .innerJoinAndSelect('leaverequest.userId', 'plazeruser')
+      .where('leaverequest.leavestatus = :status', { status: '{pending}' })
+      .select([
+        'plazeruser',
+        'plazeruser.userFName',
+        'plazeruser.userLName',
+        'leaverequest.leaveId',
+        'leaverequest.leaveStart',
+        'leaverequest.leaveEnd',
+        'leaverequest.leaveReason',
+        'leaverequest.requestDate',
+      ])
+      .getMany();
+
+    if (pendingRequests.length === 0) {
+      return 'No pending requests';
+    }
+
+    return pendingRequests;
+  }
+
+  //get reject and accept leave request
+  async getRequestsHistory() {
+    const acceptedAndRejectedRequests = await this.leaverequestRepository
+      .createQueryBuilder('leaverequest')
+      .innerJoinAndSelect('leaverequest.plazeruserid', 'plazeruser')
+      .where('leaverequest.leavestatus IN (:...statuses)', { statuses: ['{approve}', '{reject}'] })
+      .select([
+        'plazeruser.userid',
+        'plazeruser.ufname',
+        'plazeruser.ulname',
+        'leaverequest.leaveId',
+        'leaverequest.leaveStart',
+        'leaverequest.leaveEnd',
+        'leaverequest.leaveReason',
+        'leaverequest.leavestatus',
+        'leaverequest.requestDate',
+      ])
+      .getMany();
+  
+    if (acceptedAndRejectedRequests.length === 0) {
+      return 'No accepted or rejected requests';
+    }
+  
+    return acceptedAndRejectedRequests;
+  }
+  
+  //update pending Request
+  async update(
+    leaveId: number,
+    updateleaverequestdto: UpdateLeaverequestDto,
+  ): Promise<UpdateResult> {
+    try {
+      const updateData: Partial<LeaveRequest> = {
+        leaveStart: new Date(updateleaverequestdto.leaveStart),
+        leaveEnd: new Date(updateleaverequestdto.leaveEnd),
+        leaveReason: updateleaverequestdto.leaveReason,
+        requestDate: new Date(updateleaverequestdto.requestDate),
+      };
+      return this.leaverequestRepository.update(leaveId, updateData);
+    } catch (error) {
+      console.error('Error in getPendingRequests:', error);
+      return null;
+    }
+  }
+
+  //update levae request status by HR
+  async updateleaveStatus(
+    leaveId: number,
+    updateleaverequeststatus: UpdateLeaveRequestStatusDto,
+  ): Promise<UpdateResult> {
+    try {
+      const updateData: Partial<LeaveRequest> = {
+        leavestatus: [updateleaverequeststatus.newStatus],
+      };
+      const result = await this.leaverequestRepository.update(
+        leaveId,
+        updateData,
+      );
+      if (result.affected === 0) {
+        throw new Error('Update failed: leave ID not found');
+      }
+      return result;
+    } catch (error) {
+      console.error('Error in getPendingRequests:', error);
+      return null;
+    }
+  }
+}
